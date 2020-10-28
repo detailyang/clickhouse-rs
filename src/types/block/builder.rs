@@ -10,6 +10,7 @@ use crate::{
         column::{ArcColumnWrapper, ColumnData, Either}, Column, Value,
     },
 };
+use std::collections::BTreeMap;
 
 pub trait RowBuilder {
     fn apply<K: ColumnType>(self, block: &mut Block<K>) -> Result<()>;
@@ -68,6 +69,15 @@ where
 }
 
 impl RowBuilder for Vec<(String, Value)> {
+    fn apply<K: ColumnType>(self, block: &mut Block<K>) -> Result<()> {
+        for (k, v) in self {
+            put_param(k.into(), v, block)?;
+        }
+        Ok(())
+    }
+}
+
+impl RowBuilder for BTreeMap<String, Value> {
     fn apply<K: ColumnType>(self, block: &mut Block<K>) -> Result<()> {
         for (k, v) in self {
             put_param(k.into(), v, block)?;
