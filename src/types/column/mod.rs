@@ -31,7 +31,6 @@ use crate::{
 use self::chunk::ChunkColumnData;
 pub(crate) use self::{column_data::ColumnData, string_pool::StringPool};
 pub use self::{concat::ConcatColumnData, numeric::VectorColumnData};
-use crate::types::column::column_data::BoxColumnData;
 
 mod array;
 mod chunk;
@@ -387,7 +386,7 @@ impl<K: ColumnType> Column<K> {
                     };
                     x.push(Value::UInt64(value as u64));
                 }
-                
+
                 Ok(Column {
                     name: self.name.clone().into(),
                     data: ArcColumnWrapper::wrap(x),
