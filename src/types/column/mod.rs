@@ -378,48 +378,19 @@ impl<K: ColumnType> Column<K> {
                 })
             }
             (SqlType::UInt64, SqlType::UInt32) => {
-                let name = self.name().to_owned();
-                struct UInt64Wrapper<K:ColumnType> {
-                    column: Column<K>,
+                let mut x = VectorColumnData::<u64>::with_capacity(self.data.len());
+
+                for i in 0..self.data.len() {
+                    let value = match self.data.at(i) {
+                        ValueRef::UInt32(x) => x,
+                        _ => return Ok(self),
+                    };
+                    x.push(Value::UInt64(value as u64));
                 }
-
-                impl<K:ColumnType> ColumnData for UInt64Wrapper<K> {
-                    fn sql_type(&self) -> SqlType {
-                        SqlType::UInt64
-                    }
-
-                    fn save(&self, encoder: &mut Encoder, start: usize, end: usize) {
-                        for i in start..end {
-                            if let ValueRef::UInt32(value) = self.at(i) {
-                                encoder.write(value)
-                            } else {
-                                panic!("should be UInt32");
-                            }
-                        }
-                    }
-
-                    fn len(&self) -> usize {
-                        self.column.len()
-                    }
-
-                    fn push(&mut self, _value: Value) {
-                        unimplemented!()
-                    }
-
-                    fn at(&self, index: usize) -> ValueRef {
-                        self.column.at(index)
-                    }
-
-                    fn clone_instance(&self) -> BoxColumnData {
-                        unimplemented!()
-                    }
-                }
-
+                
                 Ok(Column {
-                    name,
-                    data: Arc::new(UInt64Wrapper {
-                        column: self,
-                    }),
+                    name: self.name.clone().into(),
+                    data: ArcColumnWrapper::wrap(x),
                     _marker: marker::PhantomData,
                 })
             }
