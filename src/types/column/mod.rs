@@ -376,6 +376,16 @@ impl<K: ColumnType> Column<K> {
                     _marker: marker::PhantomData,
                 })
             }
+            (SqlType::UInt64, SqlType::UInt32) => {
+                let name = self.name().to_owned();
+                let data = self.data.clone();
+
+                Ok(Column {
+                    name,
+                    data,
+                    _marker: marker::PhantomData,
+                })
+            }
             (SqlType::Ipv4, SqlType::String) => {
                 let name = self.name().to_owned();
 
