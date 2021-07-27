@@ -31,6 +31,7 @@ use crate::{
 use self::chunk::ChunkColumnData;
 pub(crate) use self::{column_data::ColumnData, string_pool::StringPool};
 pub use self::{concat::ConcatColumnData, numeric::VectorColumnData};
+use crate::types::column::column_data::BoxColumnData;
 
 mod array;
 mod chunk;
@@ -378,11 +379,47 @@ impl<K: ColumnType> Column<K> {
             }
             (SqlType::UInt64, SqlType::UInt32) => {
                 let name = self.name().to_owned();
-                let data = self.data.clone();
+                struct UInt64Wrapper<K:ColumnType> {
+                    column: Column<K>,
+                }
+
+                impl<K:ColumnType> ColumnData for UInt64Wrapper<K> {
+                    fn sql_type(&self) -> SqlType {
+                        SqlType::UInt64
+                    }
+
+                    fn save(&self, encoder: &mut Encoder, start: usize, end: usize) {
+                        for i in start..end {
+                            if let ValueRef::UInt32(value) = self.at(i) {
+                                encoder.write(value)
+                            } else {
+                                panic!("should be UInt32");
+                            }
+                        }
+                    }
+
+                    fn len(&self) -> usize {
+                        self.column.len()
+                    }
+
+                    fn push(&mut self, _value: Value) {
+                        unimplemented!()
+                    }
+
+                    fn at(&self, index: usize) -> ValueRef {
+                        self.column.at(index)
+                    }
+
+                    fn clone_instance(&self) -> BoxColumnData {
+                        unimplemented!()
+                    }
+                }
 
                 Ok(Column {
                     name,
-                    data,
+                    data: Arc::new(UInt64Wrapper {
+                        column: self,
+                    }),
                     _marker: marker::PhantomData,
                 })
             }
