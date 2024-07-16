@@ -1,4 +1,5 @@
-use std::{convert, mem, sync::Arc};
+use chrono_tz::Tz;
+use std::{mem, sync::Arc};
 
 use crate::{
     binary::{Encoder, ReadEx},
@@ -7,7 +8,7 @@ use crate::{
         column::{
             array::ArrayColumnData, nullable::NullableColumnData, ArcColumnWrapper, ColumnWrapper,
         },
-        Marshal, SqlType, StatBuffer, Unmarshal, Value, ValueRef, HasSqlType,
+        HasSqlType, Marshal, SqlType, StatBuffer, Unmarshal, Value, ValueRef,
     },
 };
 
@@ -17,14 +18,16 @@ use super::{
     ColumnFrom,
 };
 
+#[derive(Clone)]
 pub struct VectorColumnData<T>
 where
     T: StatBuffer
         + Unmarshal<T>
         + Marshal
         + Copy
-        + convert::Into<Value>
-        + convert::From<Value>
+        + Clone
+        + Into<Value>
+        + From<Value>
         + Sync
         + HasSqlType
         + 'static,
@@ -38,8 +41,8 @@ where
         + Unmarshal<T>
         + Marshal
         + Copy
-        + convert::Into<Value>
-        + convert::From<Value>
+        + Into<Value>
+        + From<Value>
         + Send
         + Sync
         + HasSqlType
@@ -56,13 +59,13 @@ where
 
 impl<T> ColumnFrom for Vec<Option<T>>
 where
-    Value: convert::From<T>,
+    Value: From<T>,
     T: StatBuffer
         + Unmarshal<T>
         + Marshal
         + Copy
-        + convert::Into<Value>
-        + convert::From<Value>
+        + Into<Value>
+        + From<Value>
         + Send
         + Sync
         + HasSqlType
@@ -87,13 +90,13 @@ where
 
 impl<T> ColumnFrom for Vec<Vec<T>>
 where
-    Value: convert::From<T>,
+    Value: From<T>,
     T: StatBuffer
         + Unmarshal<T>
         + Marshal
         + Copy
-        + convert::Into<Value>
-        + convert::From<Value>
+        + Into<Value>
+        + From<Value>
         + Send
         + Sync
         + HasSqlType
@@ -119,13 +122,13 @@ where
 
 fn to_array<T>(sql_type: SqlType, vs: Vec<T>) -> Value
 where
-    Value: convert::From<T>,
+    Value: From<T>,
     T: StatBuffer
         + Unmarshal<T>
         + Marshal
         + Copy
-        + convert::Into<Value>
-        + convert::From<Value>
+        + Into<Value>
+        + From<Value>
         + Send
         + Sync
         + HasSqlType
@@ -145,8 +148,8 @@ where
         + Unmarshal<T>
         + Marshal
         + Copy
-        + convert::Into<Value>
-        + convert::From<Value>
+        + Into<Value>
+        + From<Value>
         + Sync
         + HasSqlType
         + 'static,
@@ -165,6 +168,10 @@ where
         reader.read_bytes(data.as_mut())?;
         Ok(Self { data })
     }
+
+    pub(crate) fn get_by_index(&self, index: usize) -> T {
+        self.data.at(index)
+    }
 }
 
 impl<T> ColumnData for VectorColumnData<T>
@@ -173,8 +180,8 @@ where
         + Unmarshal<T>
         + Marshal
         + Copy
-        + convert::Into<Value>
-        + convert::From<Value>
+        + Into<Value>
+        + From<Value>
         + Send
         + Sync
         + HasSqlType
@@ -199,15 +206,18 @@ where
     fn at(&self, index: usize) -> ValueRef {
         let v: Value = self.data.at(index).into();
         match v {
+            Value::Bool(x) => ValueRef::Bool(x),
             Value::UInt8(x) => ValueRef::UInt8(x),
             Value::UInt16(x) => ValueRef::UInt16(x),
             Value::UInt32(x) => ValueRef::UInt32(x),
             Value::UInt64(x) => ValueRef::UInt64(x),
+            Value::UInt128(x) => ValueRef::UInt128(x),
 
             Value::Int8(x) => ValueRef::Int8(x),
             Value::Int16(x) => ValueRef::Int16(x),
             Value::Int32(x) => ValueRef::Int32(x),
             Value::Int64(x) => ValueRef::Int64(x),
+            Value::Int128(x) => ValueRef::Int128(x),
 
             Value::Float32(x) => ValueRef::Float32(x),
             Value::Float64(x) => ValueRef::Float64(x),
@@ -222,11 +232,20 @@ where
         })
     }
 
-    unsafe fn get_internal(&self, pointers: &[*mut *const u8], level: u8) -> Result<()> {
+    unsafe fn get_internal(
+        &self,
+        pointers: &[*mut *const u8],
+        level: u8,
+        _props: u32,
+    ) -> Result<()> {
         assert_eq!(level, 0);
         *pointers[0] = self.data.as_ptr() as *const u8;
         *(pointers[1] as *mut usize) = self.len();
         Ok(())
+    }
+
+    fn get_timezone(&self) -> Option<Tz> {
+        None
     }
 }
 

@@ -3,37 +3,52 @@ extern crate chrono_tz;
 extern crate clickhouse_rs;
 extern crate tokio;
 
+#[macro_use]
+extern crate pretty_assertions;
+
+use chrono::prelude::*;
+use chrono_tz::Tz;
+use clickhouse_rs::{
+    errors::Error,
+    row,
+    types::{Complex, Decimal, Enum16, Enum8, FromSql, SqlType, Value},
+    Block, Options, Pool,
+};
+use futures_util::{
+    future,
+    stream::{StreamExt, TryStreamExt},
+};
 use std::{
-    env,
-    f64::EPSILON,
-    fmt,
+    collections::HashMap,
+    env, fmt,
     net::{Ipv4Addr, Ipv6Addr},
+    str::{self, FromStr},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
 };
-
-use chrono::prelude::*;
-use chrono_tz::Tz;
-use futures_util::{
-    future,
-    stream::{StreamExt, TryStreamExt},
-};
-
-use clickhouse_rs::{
-    errors::Error,
-    types::{Decimal, Enum16, Enum8, FromSql},
-    Block, Pool,
-    row,
-};
 use uuid::Uuid;
-use Tz::UTC;
+use Tz::{Asia__Istanbul as IST, UTC};
 
+#[cfg(not(feature = "_tls"))]
 fn database_url() -> String {
     env::var("DATABASE_URL").unwrap_or_else(|_| {
         "tcp://localhost:9000?compression=lz4&ping_timeout=2s&retry_timeout=3s".into()
     })
+}
+
+#[cfg(feature = "_tls")]
+fn database_url() -> String {
+    env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "tcp://localhost:9440?compression=lz4&ping_timeout=2s&retry_timeout=3s&secure=true&skip_verify=true".into()
+    })
+}
+
+fn collect_values<'b, T: FromSql<'b>>(block: &'b Block<Complex>, column: &str) -> Vec<T> {
+    (0..block.row_count())
+        .map(|i| block.get(i, column).unwrap())
+        .collect()
 }
 
 #[cfg(feature = "tokio_io")]
@@ -78,10 +93,7 @@ async fn test_create_table() -> Result<(), Error> {
     c.execute(ddl).await?;
 
     if let Err(err) = c.execute(ddl).await {
-        assert_eq!(
-            "Server error: `ERROR DB::Exception (57): DB::Exception: Table default.clickhouse_test_create_table already exists.`",
-            format!("{}", err)
-        );
+        assert_eq!("Server error", &format!("{err}")[..12]);
     } else {
         panic!("should fail")
     }
@@ -112,7 +124,8 @@ async fn test_insert() -> Result<(), Error> {
                ipv6 IPv6,
                ipv4str IPv4,
                ipv6str IPv6,
-               uuid UUID
+               uuid UUID,
+               bln Bool
                ) Engine=Memory";
 
     let block = Block::new()
@@ -130,37 +143,37 @@ async fn test_insert() -> Result<(), Error> {
         .column(
             "date",
             vec![
-                UTC.ymd(2016, 10, 22),
-                UTC.ymd(2016, 10, 22),
-                UTC.ymd(2016, 10, 22),
-                UTC.ymd(2016, 10, 22),
-                UTC.ymd(2016, 10, 22),
-                UTC.ymd(2016, 10, 22),
-                UTC.ymd(2016, 10, 22),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
             ],
         )
         .column(
             "datetime",
             vec![
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
             ],
         )
         .column(
             "datetime64",
             vec![
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
-                UTC.ymd(2016, 10, 22).and_hms(12, 0, 0),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
             ],
         )
         .column(
@@ -222,7 +235,8 @@ async fn test_insert() -> Result<(), Error> {
                 Uuid::nil(),
                 Uuid::nil(),
             ],
-        );
+        )
+        .column("bln", vec![true, false, true, false, true, false, true]);
 
     let expected = block.clone();
     let pool = Pool::new(database_url());
@@ -242,6 +256,546 @@ async fn test_insert() -> Result<(), Error> {
 
 #[cfg(feature = "tokio_io")]
 #[tokio::test]
+async fn test_datetime_read_write() -> Result<(), Error> {
+    let db = "clickhouse_test_datetime_read_write";
+
+    let pool = Pool::new(database_url());
+    let mut c = pool.get_handle().await?;
+
+    c.execute(format!("DROP TABLE IF EXISTS {db}")).await?;
+    c.execute(format!(
+        "CREATE TABLE {db} (
+            datetime DateTime,
+            datetime_utc DateTime('UTC'),
+            datetime_ist DateTime('Asia/Istanbul'),
+            datetime_opt Nullable(DateTime),
+            datetime_opt_utc Nullable(DateTime('UTC')),
+            datetime_opt_ist Nullable(DateTime('Asia/Istanbul'))
+        ) Engine=Memory"
+    ))
+    .await?;
+
+    let block = Block::new()
+        .column(
+            "datetime",
+            vec![
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap(),
+            ],
+        )
+        .column(
+            "datetime_utc",
+            vec![
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap(),
+            ],
+        )
+        .column(
+            "datetime_ist",
+            vec![
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap(),
+            ],
+        )
+        .column(
+            "datetime_opt",
+            vec![
+                Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+                Some(IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap()),
+                None,
+            ],
+        )
+        .column(
+            "datetime_opt_utc",
+            vec![
+                Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+                Some(IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap()),
+                None,
+            ],
+        )
+        .column(
+            "datetime_opt_ist",
+            vec![
+                Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+                Some(IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0).unwrap()),
+                None,
+            ],
+        );
+
+    c.insert(&db, block).await?;
+
+    let actual_strings_block = c
+        .query(format!(
+            "SELECT
+                toString(datetime) as datetime_s,
+                toString(datetime_utc) as datetime_utc_s,
+                toString(datetime_ist) as datetime_ist_s,
+                toString(datetime_opt) as datetime_opt_s,
+                toString(datetime_opt_utc) as datetime_opt_utc_s,
+                toString(datetime_opt_ist) as datetime_opt_ist_s
+            FROM {db}",
+        ))
+        .fetch_all()
+        .await?;
+
+    let expected_strings_block = Block::new()
+        .column(
+            "datetime_s",
+            vec![
+                "2016-10-22 12:00:00".to_string(),
+                "2016-10-22 12:00:00".to_string(),
+                "2016-10-22 12:00:00".to_string(),
+            ],
+        )
+        .column(
+            "datetime_utc_s",
+            vec![
+                "2016-10-22 12:00:00".to_string(),
+                "2016-10-22 12:00:00".to_string(),
+                "2016-10-22 12:00:00".to_string(),
+            ],
+        )
+        .column(
+            "datetime_ist_s",
+            vec![
+                "2016-10-22 15:00:00".to_string(),
+                "2016-10-22 15:00:00".to_string(),
+                "2016-10-22 15:00:00".to_string(),
+            ],
+        )
+        .column(
+            "datetime_opt_s",
+            vec![
+                "2016-10-22 12:00:00".to_string(),
+                "2016-10-22 12:00:00".to_string(),
+                "NULL".to_string(),
+            ],
+        )
+        .column(
+            "datetime_opt_utc_s",
+            vec![
+                "2016-10-22 12:00:00".to_string(),
+                "2016-10-22 12:00:00".to_string(),
+                "NULL".to_string(),
+            ],
+        )
+        .column(
+            "datetime_opt_ist_s",
+            vec![
+                "2016-10-22 15:00:00".to_string(),
+                "2016-10-22 15:00:00".to_string(),
+                "NULL".to_string(),
+            ],
+        );
+
+    assert_eq!(
+        format!("{expected_strings_block:?}"),
+        format!("{actual_strings_block:?}")
+    );
+
+    let actual_dates_block = c
+        .query(format!(
+            "SELECT
+                datetime,
+                datetime_utc,
+                datetime_ist,
+                datetime_opt,
+                datetime_opt_utc,
+                datetime_opt_ist
+            FROM {db}"
+        ))
+        .fetch_all()
+        .await?;
+
+    assert_eq!(
+        vec![
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+        ],
+        collect_values(&actual_dates_block, "datetime")
+    );
+
+    assert_eq!(
+        vec![
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+        ],
+        collect_values(&actual_dates_block, "datetime_utc")
+    );
+
+    assert_eq!(
+        vec![
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+        ],
+        collect_values(&actual_dates_block, "datetime_ist")
+    );
+
+    assert_eq!(
+        vec![
+            Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+            Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+            None,
+        ],
+        collect_values(&actual_dates_block, "datetime_opt")
+    );
+
+    assert_eq!(
+        vec![
+            Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+            Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+            None,
+        ],
+        collect_values(&actual_dates_block, "datetime_opt_utc")
+    );
+
+    assert_eq!(
+        vec![
+            Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+            Some(UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()),
+            None,
+        ],
+        collect_values(&actual_dates_block, "datetime_opt_ist")
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
+async fn test_datetime64_read_write() -> Result<(), Error> {
+    let db = "clickhouse_test_datetime64_read_write";
+
+    let pool = Pool::new(database_url());
+    let mut c = pool.get_handle().await?;
+
+    c.execute(format!("DROP TABLE IF EXISTS {db}")).await?;
+    c.execute(format!(
+        "CREATE TABLE {db} (
+            datetime64 DateTime64(3),
+            datetime64_utc DateTime(3, 'UTC'),
+            datetime64_ist DateTime(3, 'Asia/Istanbul'),
+            datetime64_opt Nullable(DateTime64(3)),
+            datetime64_opt_utc Nullable(DateTime(3, 'UTC')),
+            datetime64_opt_ist Nullable(DateTime(3, 'Asia/Istanbul'))
+        ) Engine=Memory"
+    ))
+    .await?;
+
+    let block = Block::new()
+        .column(
+            "datetime64",
+            vec![
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+            ],
+        )
+        .column(
+            "datetime64_utc",
+            vec![
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+            ],
+        )
+        .column(
+            "datetime64_ist",
+            vec![
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+                IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_456_678)
+                    .unwrap(),
+            ],
+        )
+        .column(
+            "datetime64_opt",
+            vec![
+                Some(
+                    UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                        .unwrap()
+                        .with_nanosecond(123_456_678)
+                        .unwrap(),
+                ),
+                Some(
+                    IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                        .unwrap()
+                        .with_nanosecond(123_456_678)
+                        .unwrap(),
+                ),
+                None,
+            ],
+        )
+        .column(
+            "datetime64_opt_utc",
+            vec![
+                Some(
+                    UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                        .unwrap()
+                        .with_nanosecond(123_456_678)
+                        .unwrap(),
+                ),
+                Some(
+                    IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                        .unwrap()
+                        .with_nanosecond(123_456_678)
+                        .unwrap(),
+                ),
+                None,
+            ],
+        )
+        .column(
+            "datetime64_opt_ist",
+            vec![
+                Some(
+                    UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                        .unwrap()
+                        .with_nanosecond(123_456_678)
+                        .unwrap(),
+                ),
+                Some(
+                    IST.with_ymd_and_hms(2016, 10, 22, 15, 0, 0)
+                        .unwrap()
+                        .with_nanosecond(123_456_678)
+                        .unwrap(),
+                ),
+                None,
+            ],
+        );
+
+    c.insert(&db, block).await?;
+
+    let actual_strings_block = c
+        .query(format!(
+            "SELECT
+                toString(datetime64) as datetime64_s,
+                toString(datetime64_utc) as datetime64_utc_s,
+                toString(datetime64_ist) as datetime64_ist_s,
+                toString(datetime64_opt) as datetime64_opt_s,
+                toString(datetime64_opt_utc) as datetime64_opt_utc_s,
+                toString(datetime64_opt_ist) as datetime64_opt_ist_s
+            FROM {db}"
+        ))
+        .fetch_all()
+        .await?;
+
+    let expected_strings_block = Block::new()
+        .column(
+            "datetime64_s",
+            vec![
+                "2016-10-22 12:00:00.123".to_string(),
+                "2016-10-22 12:00:00.123".to_string(),
+                "2016-10-22 12:00:00.123".to_string(),
+            ],
+        )
+        .column(
+            "datetime64_utc_s",
+            vec![
+                "2016-10-22 12:00:00.123".to_string(),
+                "2016-10-22 12:00:00.123".to_string(),
+                "2016-10-22 12:00:00.123".to_string(),
+            ],
+        )
+        .column(
+            "datetime64_ist_s",
+            vec![
+                "2016-10-22 15:00:00.123".to_string(),
+                "2016-10-22 15:00:00.123".to_string(),
+                "2016-10-22 15:00:00.123".to_string(),
+            ],
+        )
+        .column(
+            "datetime64_opt_s",
+            vec![
+                "2016-10-22 12:00:00.123".to_string(),
+                "2016-10-22 12:00:00.123".to_string(),
+                "NULL".to_string(),
+            ],
+        )
+        .column(
+            "datetime64_opt_utc_s",
+            vec![
+                "2016-10-22 12:00:00.123".to_string(),
+                "2016-10-22 12:00:00.123".to_string(),
+                "NULL".to_string(),
+            ],
+        )
+        .column(
+            "datetime64_opt_ist_s",
+            vec![
+                "2016-10-22 15:00:00.123".to_string(),
+                "2016-10-22 15:00:00.123".to_string(),
+                "NULL".to_string(),
+            ],
+        );
+
+    assert_eq!(
+        format!("{expected_strings_block:?}"),
+        format!("{actual_strings_block:?}")
+    );
+
+    let actual_dates_block = c
+        .query(format!(
+            "SELECT
+                datetime64,
+                datetime64_utc,
+                datetime64_ist,
+                datetime64_opt,
+                datetime64_opt_utc,
+                datetime64_opt_ist
+            FROM {db}"
+        ))
+        .fetch_all()
+        .await?;
+
+    assert_eq!(
+        vec![
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+        ],
+        collect_values(&actual_dates_block, "datetime64")
+    );
+
+    assert_eq!(
+        vec![
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+        ],
+        collect_values(&actual_dates_block, "datetime64_utc")
+    );
+
+    assert_eq!(
+        vec![
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                .unwrap()
+                .with_nanosecond(123_000_000)
+                .unwrap(),
+        ],
+        collect_values(&actual_dates_block, "datetime64_ist")
+    );
+
+    assert_eq!(
+        vec![
+            Some(
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_000_000)
+                    .unwrap(),
+            ),
+            Some(
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_000_000)
+                    .unwrap(),
+            ),
+            None,
+        ],
+        collect_values(&actual_dates_block, "datetime64_opt")
+    );
+
+    assert_eq!(
+        vec![
+            Some(
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_000_000)
+                    .unwrap(),
+            ),
+            Some(
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_000_000)
+                    .unwrap(),
+            ),
+            None,
+        ],
+        collect_values(&actual_dates_block, "datetime64_opt_utc")
+    );
+
+    assert_eq!(
+        vec![
+            Some(
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_000_000)
+                    .unwrap(),
+            ),
+            Some(
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0)
+                    .unwrap()
+                    .with_nanosecond(123_000_000)
+                    .unwrap(),
+            ),
+            None,
+        ],
+        collect_values(&actual_dates_block, "datetime64_opt_ist")
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
 async fn test_empty_select() -> Result<(), Error> {
     let pool = Pool::new(database_url());
     let mut c = pool.get_handle().await?;
@@ -252,6 +806,37 @@ async fn test_empty_select() -> Result<(), Error> {
     assert_eq!(r.column_count(), 1);
 
     Ok(())
+}
+
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
+async fn test_select_settings() -> Result<(), Error> {
+    let options = Options::from_str(&database_url())?.with_setting(
+        "max_threads",
+        1,
+        /* is_important= */ true,
+    );
+    let pool = Pool::new(options);
+    let mut c = pool.get_handle().await?;
+
+    let r = c.query("SELECT 1 WHERE 1 <> 1").fetch_all().await?;
+
+    assert_eq!(r.row_count(), 0);
+    assert_eq!(r.column_count(), 1);
+
+    Ok(())
+}
+
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
+#[should_panic]
+async fn test_select_unknown_settings() {
+    let options = Options::from_str(&database_url())
+        .unwrap()
+        .with_setting("foo", 1, /* is_important= */ true);
+    let pool = Pool::new(options);
+    let mut c = pool.get_handle().await.unwrap();
+    c.query("SELECT 1 WHERE 1 <> 1").fetch_all().await.unwrap();
 }
 
 #[cfg(feature = "tokio_io")]
@@ -271,19 +856,21 @@ async fn test_select() -> Result<(), Error> {
         .column(
             "date",
             vec![
-                UTC.ymd(2014, 7, 8),
-                UTC.ymd(2014, 7, 8),
-                UTC.ymd(2014, 7, 8),
-                UTC.ymd(2014, 7, 9),
+                NaiveDate::from_ymd_opt(2014, 7, 8).unwrap(),
+                NaiveDate::from_ymd_opt(2014, 7, 8).unwrap(),
+                NaiveDate::from_ymd_opt(2014, 7, 8).unwrap(),
+                NaiveDate::from_ymd_opt(2014, 7, 9).unwrap(),
             ],
         )
         .column(
             "datetime",
             vec![
-                Tz::Singapore.ymd(2014, 7, 8).and_hms(14, 0, 0),
-                UTC.ymd(2014, 7, 8).and_hms(14, 0, 0),
-                UTC.ymd(2014, 7, 8).and_hms(14, 0, 0),
-                UTC.ymd(2014, 7, 8).and_hms(13, 0, 0),
+                Tz::Singapore
+                    .with_ymd_and_hms(2014, 7, 8, 14, 0, 0)
+                    .unwrap(),
+                UTC.with_ymd_and_hms(2014, 7, 8, 14, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2014, 7, 8, 14, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2014, 7, 8, 13, 0, 0).unwrap(),
             ],
         );
 
@@ -363,7 +950,7 @@ fn test_simple_select() {
 
 #[cfg(feature = "tokio_io")]
 #[tokio::test]
-async fn test_simple_select() -> Result<(), Error> {
+async fn test_simple_selects() -> Result<(), Error> {
     let pool = Pool::new(database_url());
     let mut c = pool.get_handle().await?;
     let actual = c.query("SELECT a FROM (SELECT 1 AS a UNION ALL SELECT 2 AS a UNION ALL SELECT 3 AS a) ORDER BY a ASC").fetch_all().await?;
@@ -395,8 +982,7 @@ async fn test_simple_select() -> Result<(), Error> {
         )
         .fetch_all()
         .await?;
-    assert!((2_f64 - r.get::<f64, _>(0, 0)?).abs() < EPSILON);
-
+    assert!((2_f64 - r.get::<f64, _>(0, 0)?).abs() < f64::EPSILON);
 
     let expected = Block::new().column("a", vec![1_u8, 2, 3]);
     assert_eq!(expected, actual);
@@ -425,7 +1011,7 @@ async fn test_simple_select() -> Result<(), Error> {
         )
         .fetch_all()
         .await?;
-    assert!((2_f64 - r.get::<f64, _>(0, 0)?).abs() < EPSILON);
+    assert!((2_f64 - r.get::<f64, _>(0, 0)?).abs() < f64::EPSILON);
 
     Ok(())
 }
@@ -511,7 +1097,7 @@ async fn test_stream_rows() -> Result<(), Error> {
 #[tokio::test]
 async fn test_concurrent_queries() -> Result<(), Error> {
     async fn query_sum(n: u64) -> Result<u64, Error> {
-        let sql = format!("SELECT number FROM system.numbers LIMIT {}", n);
+        let sql = format!("SELECT number FROM system.numbers LIMIT {n}");
 
         let pool = Pool::new(database_url());
         let mut c = pool.get_handle().await?;
@@ -586,7 +1172,8 @@ async fn test_nullable() -> Result<(), Error> {
             datetime64 Nullable(DateTime64(3, 'UTC')),
             ipv4       Nullable(IPv4),
             ipv6       Nullable(IPv6),
-            uuid       Nullable(UUID)
+            uuid       Nullable(UUID),
+            bln        Nullable(Bool)
         ) Engine=Memory";
 
     let query = "
@@ -607,11 +1194,12 @@ async fn test_nullable() -> Result<(), Error> {
             datetime64,
             ipv4,
             ipv6,
-            uuid
+            uuid,
+            bln
         FROM clickhouse_test_nullable";
 
-    let date_value: Date<Tz> = UTC.ymd(2016, 10, 22);
-    let date_time_value: DateTime<Tz> = UTC.ymd(2014, 7, 8).and_hms(14, 0, 0);
+    let date_value: NaiveDate = NaiveDate::from_ymd_opt(2016, 10, 22).unwrap();
+    let date_time_value: DateTime<Tz> = UTC.with_ymd_and_hms(2014, 7, 8, 14, 0, 0).unwrap();
 
     let block = Block::new()
         .column("int8", vec![Some(1_i8)])
@@ -633,7 +1221,13 @@ async fn test_nullable() -> Result<(), Error> {
             "ipv6",
             vec![Some(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xc00a, 0x2ff))],
         )
-        .column("uuid", vec![Some(Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap())]);
+        .column(
+            "uuid",
+            vec![Some(
+                Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap(),
+            )],
+        )
+        .column("bln", vec![Some(true)]);
 
     let pool = Pool::new(database_url());
     let mut c = pool.get_handle().await?;
@@ -654,12 +1248,13 @@ async fn test_nullable() -> Result<(), Error> {
     let float32: Option<f32> = block.get(0, "float32")?;
     let float64: Option<f64> = block.get(0, "float64")?;
     let string: Option<&str> = block.get(0, "string")?;
-    let date: Option<Date<Tz>> = block.get(0, "date")?;
+    let date: Option<NaiveDate> = block.get(0, "date")?;
     let datetime: Option<DateTime<Tz>> = block.get(0, "datetime")?;
     let datetime64: Option<DateTime<Tz>> = block.get(0, "datetime64")?;
     let ipv4: Option<Ipv4Addr> = block.get(0, "ipv4")?;
     let ipv6: Option<Ipv6Addr> = block.get(0, "ipv6")?;
     let uuid: Option<Uuid> = block.get(0, "uuid")?;
+    let bln: Option<bool> = block.get(0, "bln")?;
 
     assert_eq!(int8, Some(1_i8));
     assert_eq!(int16, Some(1_i16));
@@ -682,7 +1277,11 @@ async fn test_nullable() -> Result<(), Error> {
         Some(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xc00a, 0x2ff))
     );
 
-    assert_eq!(uuid, Some(Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap()));
+    assert_eq!(
+        uuid,
+        Some(Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap())
+    );
+    assert_eq!(bln, Some(true),);
 
     Ok(())
 }
@@ -777,7 +1376,8 @@ async fn test_foreign_columns() -> Result<(), Error> {
 
     let pool = Pool::new(database_url());
     let mut c = pool.get_handle().await?;
-    c.execute("DROP TABLE IF EXISTS clickhouse_foreign_columns").await?;
+    c.execute("DROP TABLE IF EXISTS clickhouse_foreign_columns")
+        .await?;
     c.execute(ddl).await?;
     c.insert("clickhouse_foreign_columns", block).await?;
     let block = c.query(query).fetch_all().await?;
@@ -924,13 +1524,54 @@ async fn test_enum_16_nullable() -> Result<(), Error> {
 
 #[cfg(feature = "tokio_io")]
 #[tokio::test]
+async fn test_enum_16_array() -> Result<(), Error> {
+    let ddl = "
+        CREATE TABLE IF NOT EXISTS clickhouse_enum_arr (
+            enum_16_arr_row Array(Enum16(
+                               'zero' = 5,
+                               'first' = 6
+                            ))
+        ) Engine=Memory";
+
+    let query = "
+        SELECT
+            enum_16_arr_row
+        FROM clickhouse_enum_arr";
+
+    let block = Block::new().column(
+        "enum_16_arr_row",
+        vec![vec![Enum16::of(5)], vec![Enum16::of(6)]],
+    );
+
+    let pool = Pool::new(database_url());
+    let mut c = pool.get_handle().await?;
+    c.execute("DROP TABLE IF EXISTS clickhouse_enum_arr")
+        .await?;
+    c.execute(ddl).await?;
+    c.insert("clickhouse_enum_arr", block).await?;
+    let block = c.query(query).fetch_all().await?;
+
+    let enum_16_a: Vec<Enum16> = block.get(0, "enum_16_arr_row")?;
+    let enum_16_b: Vec<Enum16> = block.get(1, "enum_16_arr_row")?;
+
+    assert_eq!(2, block.row_count());
+    assert_eq!(
+        vec![vec![Enum16::of(5)], vec![Enum16::of(6)]],
+        vec![enum_16_a, enum_16_b]
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
 async fn test_enum_8() -> Result<(), Error> {
     let ddl = "
         CREATE TABLE IF NOT EXISTS clickhouse_Enum (
-            enum_8_row        Enum8(
-                                'zero' = 1,
-                                'first' = 2
-                          )
+            enum_8_row  Enum8(
+                            'zero' = 1,
+                            'first' = 2
+                        )
         ) Engine=Memory";
 
     let query = "
@@ -961,23 +1602,65 @@ async fn test_enum_8() -> Result<(), Error> {
 
 #[cfg(feature = "tokio_io")]
 #[tokio::test]
+async fn test_enum_8_array() -> Result<(), Error> {
+    let ddl = "
+        CREATE TABLE IF NOT EXISTS clickhouse_enum8_arr (
+            enum_8_arr_row Array(Enum8(
+                               'zero' = 5,
+                               'first' = 6
+                            ))
+        ) Engine=Memory";
+
+    let query = "
+        SELECT
+            enum_8_arr_row
+        FROM clickhouse_enum8_arr";
+
+    let block = Block::new().column(
+        "enum_8_arr_row",
+        vec![vec![Enum8::of(5)], vec![Enum8::of(6)]],
+    );
+
+    let pool = Pool::new(database_url());
+    let mut c = pool.get_handle().await?;
+    c.execute("DROP TABLE IF EXISTS clickhouse_enum8_arr")
+        .await?;
+    c.execute(ddl).await?;
+    c.insert("clickhouse_enum8_arr", block).await?;
+    let block = c.query(query).fetch_all().await?;
+
+    let enum_16_a: Vec<Enum8> = block.get(0, "enum_8_arr_row")?;
+    let enum_16_b: Vec<Enum8> = block.get(1, "enum_8_arr_row")?;
+
+    assert_eq!(2, block.row_count());
+    assert_eq!(
+        vec![vec![Enum8::of(5)], vec![Enum8::of(6)]],
+        vec![enum_16_a, enum_16_b]
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
 async fn test_array() -> Result<(), Error> {
     let ddl = "
         CREATE TABLE clickhouse_array (
-            u8    Array(UInt8),
-            u32   Array(UInt32),
-            f64   Array(Float64),
-            text1 Array(String),
-            text2 Array(String),
-            date  Array(Date),
-            time  Array(DateTime),
-            time64  Array(DateTime64(3, 'UTC'))
+            u8      Array(UInt8),
+            u32     Array(UInt32),
+            f64     Array(Float64),
+            text1   Array(String),
+            text2   Array(String),
+            date    Array(Date),
+            time    Array(DateTime),
+            time64  Array(DateTime64(3, 'UTC')),
+            bln     Array(Bool)
         ) Engine=Memory";
 
-    let query = "SELECT u8, u32, f64, text1, text2, date, time, time64  FROM clickhouse_array";
+    let query = "SELECT u8, u32, f64, text1, text2, date, time, time64, bln  FROM clickhouse_array";
 
-    let date_value: Date<Tz> = UTC.ymd(2016, 10, 22);
-    let date_time_value: DateTime<Tz> = UTC.ymd(2014, 7, 8).and_hms(14, 0, 0);
+    let date_value: NaiveDate = NaiveDate::from_ymd_opt(2016, 10, 22).unwrap();
+    let date_time_value: DateTime<Tz> = UTC.with_ymd_and_hms(2014, 7, 8, 14, 0, 0).unwrap();
 
     let block = Block::new()
         .column("u8", vec![vec![41_u8]])
@@ -987,7 +1670,8 @@ async fn test_array() -> Result<(), Error> {
         .column("text2", vec![vec!["B".to_string()]])
         .column("date", vec![vec![date_value]])
         .column("time", vec![vec![date_time_value]])
-        .column("time64", vec![vec![date_time_value]]);
+        .column("time64", vec![vec![date_time_value]])
+        .column("bln", vec![vec![true]]);
 
     let pool = Pool::new(database_url());
 
@@ -1002,9 +1686,10 @@ async fn test_array() -> Result<(), Error> {
     let f64_vec: Vec<f64> = block.get(0, "f64")?;
     let text1_vec: Vec<&str> = block.get(0, "text1")?;
     let text2_vec: Vec<String> = block.get(0, "text2")?;
-    let date_vec: Vec<Date<Tz>> = block.get(0, "date")?;
+    let date_vec: Vec<NaiveDate> = block.get(0, "date")?;
     let time_vec: Vec<DateTime<Tz>> = block.get(0, "time")?;
     let time64_vec: Vec<DateTime<Tz>> = block.get(0, "time64")?;
+    let bln_vec: Vec<bool> = block.get(0, "bln")?;
 
     assert_eq!(1, block.row_count());
     assert_eq!(vec![41_u8], u8_vec);
@@ -1015,6 +1700,7 @@ async fn test_array() -> Result<(), Error> {
     assert_eq!(vec![date_value], date_vec);
     assert_eq!(vec![date_time_value], time_vec);
     assert_eq!(vec![date_time_value], time64_vec);
+    assert_eq!(vec![true], bln_vec);
 
     Ok(())
 }
@@ -1071,13 +1757,14 @@ async fn test_column_iter() -> Result<(), Error> {
             array      Array(UInt32),
             ipv4       IPv4,
             ipv6       IPv6,
-            uuid       UUID
+            uuid       UUID,
+            bln        Bool
         ) Engine=Memory";
 
     let query = r"SELECT * FROM clickhouse_test_column_iter";
 
-    let date_value: Date<Tz> = UTC.ymd(2016, 10, 22);
-    let date_time_value: DateTime<Tz> = UTC.ymd(2014, 7, 8).and_hms(14, 0, 0);
+    let date_value: NaiveDate = NaiveDate::from_ymd_opt(2016, 10, 22).unwrap();
+    let date_time_value: DateTime<Tz> = UTC.with_ymd_and_hms(2014, 7, 8, 14, 0, 0).unwrap();
 
     let block = Block::new()
         .column("uint64", vec![1_u64, 2, 3])
@@ -1100,7 +1787,11 @@ async fn test_column_iter() -> Result<(), Error> {
         .column("array", vec![vec![42_u32], Vec::new(), Vec::new()])
         .column("ipv4", vec!["127.0.0.1", "127.0.0.1", "127.0.0.1"])
         .column("ipv6", vec!["::1", "::1", "::1"])
-        .column("uuid", vec![Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap(); 3]);
+        .column(
+            "uuid",
+            vec![Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap(); 3],
+        )
+        .column("bln", vec![true, false, true]);
 
     let pool = Pool::new(database_url());
     let mut c = pool.get_handle().await?;
@@ -1134,7 +1825,7 @@ async fn test_column_iter() -> Result<(), Error> {
         let expected: Vec<Option<&[u8]>> = vec![Some(&[65_u8]), None, None];
         assert_eq!(opt_str_iter, expected);
 
-        let date_iter: Vec<_> = block.get_column("date")?.iter::<Date<Tz>>()?.collect();
+        let date_iter: Vec<_> = block.get_column("date")?.iter::<NaiveDate>()?.collect();
         assert_eq!(date_iter, vec![date_value, date_value, date_value]);
 
         let datetime_iter: Vec<_> = block
@@ -1155,6 +1846,22 @@ async fn test_column_iter() -> Result<(), Error> {
             vec![date_time_value, date_time_value, date_time_value]
         );
 
+        let naive_datetime64_iter: Vec<_> = block
+            .get_column("datetime64")?
+            .iter::<NaiveDateTime>()?
+            .collect();
+        assert_eq!(
+            naive_datetime64_iter,
+            vec![
+                {
+                    let d = NaiveDate::from_ymd_opt(2014, 7, 8).unwrap();
+                    let t = NaiveTime::from_hms_opt(14, 0, 0).unwrap();
+                    NaiveDateTime::new(d, t)
+                };
+                3
+            ]
+        );
+
         let decimal_iter: Vec<_> = block.get_column("decimal")?.iter::<Decimal>()?.collect();
         assert_eq!(
             decimal_iter,
@@ -1171,7 +1878,13 @@ async fn test_column_iter() -> Result<(), Error> {
         assert_eq!(ipv6_iter, vec![Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1); 3]);
 
         let uuid_iter: Vec<_> = block.get_column("uuid")?.iter::<Uuid>()?.collect();
-        assert_eq!(uuid_iter, vec![Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap(); 3]);
+        assert_eq!(
+            uuid_iter,
+            vec![Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap(); 3]
+        );
+
+        let bln: Vec<_> = block.get_column("bln")?.iter::<bool>()?.collect();
+        assert_eq!(bln, vec![&true, &false, &true]);
     }
 
     Ok(())
@@ -1290,8 +2003,7 @@ async fn test_ip_from_string() -> Result<(), Error> {
         ) ENGINE = Memory
     ";
 
-    let source_block = Block::new()
-        .column("ip_v4", vec!["192.168.2.1", "1.2.3.4"]);
+    let source_block = Block::new().column("ip_v4", vec!["192.168.2.1", "1.2.3.4"]);
 
     let pool = Pool::new(database_url());
 
@@ -1300,9 +2012,7 @@ async fn test_ip_from_string() -> Result<(), Error> {
         .execute("DROP TABLE IF EXISTS clickhouse_test_ipv4")
         .await?;
     client.execute(ddl).await?;
-    client
-        .insert("clickhouse_test_ipv4", source_block)
-        .await?;
+    client.insert("clickhouse_test_ipv4", source_block).await?;
     let block = client
         .query("SELECT ip_v4 FROM clickhouse_test_ipv4")
         .fetch_all()
@@ -1325,8 +2035,10 @@ async fn test_ipv6_from_string() -> Result<(), Error> {
         ) ENGINE = Memory
     ";
 
-    let source_block = Block::new()
-        .column("ip_v6", vec!["0001:0203:0405:0607:0809:0A0B:0C0D:0E0F", "::1", "1::"]);
+    let source_block = Block::new().column(
+        "ip_v6",
+        vec!["0001:0203:0405:0607:0809:0A0B:0C0D:0E0F", "::1", "1::"],
+    );
 
     let pool = Pool::new(database_url());
 
@@ -1335,9 +2047,7 @@ async fn test_ipv6_from_string() -> Result<(), Error> {
         .execute("DROP TABLE IF EXISTS clickhouse_test_ipv6")
         .await?;
     client.execute(ddl).await?;
-    client
-        .insert("clickhouse_test_ipv6", source_block)
-        .await?;
+    client.insert("clickhouse_test_ipv6", source_block).await?;
     let block = client
         .query("SELECT ip_v6 FROM clickhouse_test_ipv6")
         .fetch_all()
@@ -1347,7 +2057,10 @@ async fn test_ipv6_from_string() -> Result<(), Error> {
     let ip2: Ipv6Addr = block.get(1, "ip_v6")?;
     let ip3: Ipv6Addr = block.get(2, "ip_v6")?;
 
-    assert_eq!(ip1, Ipv6Addr::new(0x0001, 0x0203, 0x0405, 0x0607, 0x0809, 0x0A0B, 0x0C0D, 0x0E0F));
+    assert_eq!(
+        ip1,
+        Ipv6Addr::new(0x0001, 0x0203, 0x0405, 0x0607, 0x0809, 0x0A0B, 0x0C0D, 0x0E0F)
+    );
     assert_eq!(ip2, Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
     assert_eq!(ip3, Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 0));
     Ok(())
@@ -1362,8 +2075,10 @@ async fn test_ipv6_db_representation() -> Result<(), Error> {
         ) ENGINE = Memory
     ";
 
-    let source_block = Block::new()
-        .column("ip_v6", vec!["0001:0203:0405:0607:0809:0A0B:0C0D:0E0F", "::1", "1::"]);
+    let source_block = Block::new().column(
+        "ip_v6",
+        vec!["0001:0203:0405:0607:0809:0A0B:0C0D:0E0F", "::1", "1::"],
+    );
 
     let pool = Pool::new(database_url());
 
@@ -1381,7 +2096,7 @@ async fn test_ipv6_db_representation() -> Result<(), Error> {
         .await?;
 
     let ip1: &str = block.get(0, "ip_v6_str")?;
-    let ip2: &str  = block.get(1, "ip_v6_str")?;
+    let ip2: &str = block.get(1, "ip_v6_str")?;
     let ip3: &str = block.get(2, "ip_v6_str")?;
 
     assert_eq!(ip1, "1:203:405:607:809:a0b:c0d:e0f");
@@ -1400,23 +2115,33 @@ async fn test_insert_date64() -> Result<(), Error> {
         ) ENGINE = Memory
     ";
 
-    let date = chrono_tz::UTC.ymd(2020, 2, 3).and_hms_nano(13, 45, 50, 8927265);
+    let date = chrono_tz::UTC
+        .with_ymd_and_hms(2020, 2, 3, 13, 45, 50)
+        .unwrap()
+        .with_nanosecond(8927265)
+        .unwrap();
     let mut block = Block::new();
-    block.push(row!{
+    block.push(row! {
         id: 1u32,
         date,
     })?;
 
-
     let pool = Pool::new(database_url());
 
     let mut client = pool.get_handle().await?;
-    client.execute("DROP TABLE IF EXISTS clickhouse_test_insert_date64").await?;
+    client
+        .execute("DROP TABLE IF EXISTS clickhouse_test_insert_date64")
+        .await?;
     client.execute(ddl).await?;
 
-    client.insert("clickhouse_test_insert_date64", &block).await?;
+    client
+        .insert("clickhouse_test_insert_date64", &block)
+        .await?;
 
-    let result = client.query("SELECT * FROM clickhouse_test_insert_date64").fetch_all().await?;
+    let result = client
+        .query("SELECT * FROM clickhouse_test_insert_date64")
+        .fetch_all()
+        .await?;
     assert_eq!(result.row_count(), 1);
 
     Ok(())
@@ -1442,17 +2167,410 @@ async fn test_simple_agg_func() -> Result<(), Error> {
     let pool = Pool::new(database_url());
 
     let mut client = pool.get_handle().await?;
-    client.execute("DROP TABLE IF EXISTS clickhouse_test_simple_agg_func").await?;
+    client
+        .execute("DROP TABLE IF EXISTS clickhouse_test_simple_agg_func")
+        .await?;
     client.execute(ddl).await?;
-    client.insert("clickhouse_test_simple_agg_func", &block).await?;
+    client
+        .insert("clickhouse_test_simple_agg_func", &block)
+        .await?;
 
-    let result = client.query("SELECT * FROM clickhouse_test_simple_agg_func").fetch_all().await?;
-    let actual: Vec<_> = result
-        .get_column("val")?
-        .iter::<i64>()?
-        .copied()
-        .collect();
+    let result = client
+        .query("SELECT * FROM clickhouse_test_simple_agg_func")
+        .fetch_all()
+        .await?;
+    let actual: Vec<_> = result.get_column("val")?.iter::<i64>()?.copied().collect();
     assert_eq!(actual, vec![6_i64, 9, 7]);
     Ok(())
 }
 
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
+async fn test_map() -> Result<(), Error> {
+    let mut map = HashMap::new();
+    map.insert("test".to_string(), 0_u8);
+    map.insert("foo".to_string(), 1);
+
+    let b = map.clone();
+
+    let mut block = Block::new();
+    block.push(row! {
+        id: 1u32,
+        map,
+    })?;
+
+    let pool = Pool::new(database_url());
+    let mut client = pool.get_handle().await?;
+
+    client
+        .execute("DROP TABLE IF EXISTS clickhouse_test_map")
+        .await
+        .unwrap();
+    client
+        .execute(
+            "
+        CREATE TABLE IF NOT EXISTS clickhouse_test_map (
+            id UInt32,
+            map Map(String, UInt8)
+        ) Engine=MergeTree ORDER BY id;
+         ",
+        )
+        .await
+        .unwrap();
+
+    client.insert("clickhouse_test_map", &block).await.unwrap();
+
+    let result = client
+        .query("SELECT * FROM clickhouse_test_map")
+        .fetch_all()
+        .await
+        .unwrap();
+
+    assert_eq!(result.row_count(), 1);
+
+    for row in result.rows() {
+        let id: u32 = row.get("id")?;
+        let map: HashMap<String, u8> = row.get("map")?;
+
+        assert_eq!(id, 1);
+        assert_eq!(map, b);
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
+async fn test_iter_map() -> Result<(), Error> {
+    let mut block = Block::new();
+    block.push(row! {
+        map: Value::from(HashMap::from([
+            (1_u8, HashMap::from([(3_u8, 5_u8)])),
+            (2_u8, HashMap::from([(4_u8, 6_u8), (7, 8)])),
+        ])),
+        opt_map: Value::Map(
+            SqlType::from(Value::UInt8(3).clone()).into(),
+            SqlType::from(Value::from(Some(4_u8))).into(),
+            Arc::new(HashMap::from([
+                (
+                    Value::UInt8(3),
+                    Value::from(Some(4_u8))
+                ),
+                (
+                    Value::UInt8(5),
+                    Value::from(Some(6_u8))
+                ),
+            ])),
+        ),
+    })?;
+
+    let pool = Pool::new(database_url());
+    let mut client = pool.get_handle().await?;
+
+    client
+        .execute("DROP TABLE IF EXISTS clickhouse_test_iter_map")
+        .await
+        .unwrap();
+    client
+        .execute(
+            r"
+            create table clickhouse_test_iter_map
+            (
+                map Map(UInt8,Map(UInt8,UInt8)),
+                opt_map Map(UInt8,Nullable(UInt8))
+            )
+            engine = Memory;",
+        )
+        .await
+        .unwrap();
+
+    client
+        .insert("clickhouse_test_iter_map", &block)
+        .await
+        .unwrap();
+
+    let result = client
+        .query("SELECT * FROM clickhouse_test_iter_map")
+        .fetch_all()
+        .await
+        .unwrap();
+
+    assert_eq!(result.row_count(), 1);
+    dbg!(result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_iter_low_cardinality() -> Result<(), Error> {
+    let ddl = r"
+        CREATE TABLE IF NOT EXISTS clickhouse_iter_low_cardinality (
+            id       UInt64,
+            text     LowCardinality(String),
+            fixed    LowCardinality(FixedString(1)),
+            datetime LowCardinality(DateTime),
+            date     LowCardinality(Date)
+        ) ENGINE = Memory
+    ";
+
+    let block = Block::new()
+        .column("text", vec!["A", "B", "C", "B", "B"])
+        .column("fixed", vec!["A", "B", "C", "B", "B"])
+        .column("id", vec![1_u64, 2, 3, 4, 5])
+        .column(
+            "datetime",
+            vec![
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            ],
+        )
+        .column(
+            "date",
+            vec![
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+            ],
+        );
+
+    let options = Options::from_str(&database_url())?.with_setting(
+        "allow_suspicious_low_cardinality_types",
+        1,
+        true,
+    );
+    let pool = Pool::new(options);
+
+    let mut c = pool.get_handle().await?;
+    c.execute("DROP TABLE IF EXISTS clickhouse_iter_low_cardinality")
+        .await?;
+    c.execute(ddl).await?;
+    c.insert("clickhouse_iter_low_cardinality", block).await?;
+    let query = "SELECT id, text, fixed, datetime, date FROM clickhouse_iter_low_cardinality";
+    let block = c.query(query).fetch_all().await?;
+
+    let text_col: Vec<_> = block
+        .get_column("text")?
+        .iter::<&[u8]>()?
+        .filter_map(|s| str::from_utf8(s).ok())
+        .collect();
+    let fixed_col: Vec<_> = block
+        .get_column("fixed")?
+        .iter::<&[u8]>()?
+        .filter_map(|s| str::from_utf8(s).ok())
+        .collect();
+    let datetime_col: Vec<_> = block
+        .get_column("datetime")?
+        .iter::<DateTime<Tz>>()?
+        .collect();
+    let date_col: Vec<_> = block.get_column("date")?.iter::<NaiveDate>()?.collect();
+
+    assert_eq!(text_col, vec!["A", "B", "C", "B", "B"]);
+    assert_eq!(fixed_col, vec!["A", "B", "C", "B", "B"]);
+    assert_eq!(
+        datetime_col,
+        vec![
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+        ]
+    );
+    assert_eq!(
+        date_col,
+        vec![
+            NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+            NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+            NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+            NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+            NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_low_cardinality() -> Result<(), Error> {
+    let ddl = r"
+        CREATE TABLE IF NOT EXISTS clickhouse_low_cardinality (
+            id       UInt64,
+            text     LowCardinality(String),
+            fixed    LowCardinality(FixedString(2)),
+            date     LowCardinality(Date),
+            datetime LowCardinality(DateTime),
+            num      LowCardinality(UInt32)
+        ) ENGINE = Memory
+    ";
+
+    let block = Block::new()
+        .column("id", vec![1_u64, 2, 3, 4, 5])
+        .column("num", vec![1_u32, 2, 3, 2, 2])
+        .column("text", vec!["A", "B", "C", "B", "B"])
+        .column("fixed", vec!["AA", "BB", "CC", "BB", "BB"])
+        .column(
+            "date",
+            vec![
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+                NaiveDate::from_ymd_opt(2016, 10, 22).unwrap(),
+            ],
+        )
+        .column(
+            "datetime",
+            vec![
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+                UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap(),
+            ],
+        );
+
+    let options = Options::from_str(&database_url())?.with_setting(
+        "allow_suspicious_low_cardinality_types",
+        1,
+        true,
+    );
+    let pool = Pool::new(options);
+
+    let mut c = pool.get_handle().await?;
+    c.execute("DROP TABLE IF EXISTS clickhouse_low_cardinality")
+        .await?;
+    c.execute(ddl).await?;
+    c.insert("clickhouse_low_cardinality", block).await?;
+
+    let query = "SELECT id, text, fixed, date, datetime, num FROM clickhouse_low_cardinality";
+    let block = c.query(query).fetch_all().await?;
+
+    let id: u64 = block.get(0, "id")?;
+    let text: String = block.get(0, "text")?;
+    let fixed: String = block.get(0, "fixed")?;
+    let date: NaiveDate = block.get(0, "date")?;
+    let datetime: DateTime<Tz> = block.get(0, "datetime")?;
+    let num: u32 = block.get(0, "num")?;
+
+    assert_eq!(id, 1_u64);
+    assert_eq!(text, "A".to_string());
+    assert_eq!(fixed, "AA".to_string());
+    assert_eq!(date, NaiveDate::from_ymd_opt(2016, 10, 22).unwrap());
+    assert_eq!(
+        datetime,
+        UTC.with_ymd_and_hms(2016, 10, 22, 12, 0, 0).unwrap()
+    );
+    assert_eq!(num, 1_u32);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_int_128() -> Result<(), Error> {
+    let ddl = "
+        CREATE TABLE clickhouse_test_int_128 (
+            i  Int128,
+            u UInt128,
+            oi Nullable(Int128)
+        ) Engine=Memory";
+
+    let query = "SELECT i, u, oi FROM clickhouse_test_int_128";
+
+    let block = Block::new()
+        .column("i", vec![1_000_i128, 2_000_000, 3_000_000_000])
+        .column("u", vec![1_000_u128, 2_000_000, 3_000_000_000])
+        .column("oi", vec![Some(1_000_i128), None, Some(3_000_000_000)]);
+
+    let pool = Pool::new(database_url());
+
+    let mut c = pool.get_handle().await?;
+    c.execute("DROP TABLE IF EXISTS clickhouse_test_int_128")
+        .await?;
+    c.execute(ddl).await?;
+    c.insert("clickhouse_test_int_128", block).await?;
+    let block = c.query(query).fetch_all().await?;
+
+    let i: i128 = block.get(0, "i")?;
+    let u: u128 = block.get(0, "u")?;
+    let oi: Option<i128> = block.get(0, "oi")?;
+
+    assert_eq!(i, 1_000_i128);
+    assert_eq!(u, 1_000_u128);
+    assert_eq!(oi, Some(1_000_i128));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_iter_int_128() -> Result<(), Error> {
+    let ddl = "
+        CREATE TABLE clickhouse_test_iter_int_128 (
+            i  Int128,
+            u  UInt128,
+            oi Nullable(Int128),
+            ou Nullable(UInt128)
+        ) Engine=Memory";
+
+    let query = "SELECT i, u, oi, ou FROM clickhouse_test_iter_int_128";
+
+    let block = Block::new()
+        .column("i", vec![1_000_i128, 2_000_000, 3_000_000_000])
+        .column("u", vec![1_000_u128, 2_000_000, 3_000_000_000])
+        .column("oi", vec![Some(1_000_i128), None, Some(3_000_000_000)])
+        .column("ou", vec![Some(1_000_u128), None, Some(3_000_000_000)]);
+
+    let pool = Pool::new(database_url());
+
+    let mut c = pool.get_handle().await?;
+    c.execute("DROP TABLE IF EXISTS clickhouse_test_iter_int_128")
+        .await?;
+    c.execute(ddl).await?;
+    c.insert("clickhouse_test_iter_int_128", block).await?;
+    let block = c.query(query).fetch_all().await?;
+
+    let is: Vec<_> = block.get_column("i")?.iter::<i128>()?.copied().collect();
+    assert_eq!(is, vec![1_000_i128, 2_000_000, 3_000_000_000]);
+
+    let us: Vec<_> = block.get_column("u")?.iter::<u128>()?.copied().collect();
+    assert_eq!(us, vec![1_000_u128, 2_000_000, 3_000_000_000]);
+
+    let ois: Vec<_> = block.get_column("oi")?.iter::<Option<i128>>()?.collect();
+    assert_eq!(ois, vec![Some(&1_000_i128), None, Some(&3_000_000_000)]);
+
+    let ous: Vec<_> = block.get_column("ou")?.iter::<Option<u128>>()?.collect();
+    assert_eq!(ous, vec![Some(&1_000_u128), None, Some(&3_000_000_000)]);
+
+    Ok(())
+}
+
+#[cfg(feature = "tokio_io")]
+#[tokio::test]
+async fn test_insert_big_block() -> Result<(), Error> {
+    let ddl = r"
+               CREATE TABLE clickhouse_test_insert_big_block (
+               int8  Int8
+               ) Engine=Memory";
+    let big_block_size = 1024 * 1024 + 1;
+
+    let block = Block::new().column("int8", vec![-1_i8; big_block_size]);
+
+    let expected = block.clone();
+    let pool = Pool::new(database_url());
+    let mut c = pool.get_handle().await?;
+    c.execute("DROP TABLE IF EXISTS clickhouse_test_insert_big_block")
+        .await?;
+    c.execute(ddl).await?;
+    c.insert("clickhouse_test_insert_big_block", block).await?;
+    let actual = c
+        .query("SELECT * FROM clickhouse_test_insert_big_block")
+        .fetch_all()
+        .await?;
+
+    assert_eq!(format!("{:?}", expected.as_ref()), format!("{:?}", &actual));
+    Ok(())
+}

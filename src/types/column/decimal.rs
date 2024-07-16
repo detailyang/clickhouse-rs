@@ -1,19 +1,21 @@
-use std::sync::Arc;
 use chrono_tz::Tz;
+use either::Either;
+use std::sync::Arc;
 
 use crate::{
     binary::{Encoder, ReadEx},
     errors::Result,
     types::{
-        ColumnType,
         column::{
-            BoxColumnWrapper, column_data::BoxColumnData, column_data::ColumnData,
-            ColumnFrom, ColumnWrapper, Either, list::List, nullable::NullableColumnData,
-            VectorColumnData,
+            column_data::{BoxColumnData, ColumnData},
+            list::List,
+            nullable::NullableColumnData,
+            util::extract_nulls_and_values,
+            BoxColumnWrapper, ColumnFrom, ColumnWrapper, VectorColumnData,
         },
-        Column,
         decimal::{Decimal, NoBits},
-        from_sql::FromSql, SqlType, Value, ValueRef,
+        from_sql::FromSql,
+        Column, ColumnType, SqlType, Value, ValueRef,
     },
 };
 
@@ -51,7 +53,8 @@ impl DecimalColumnData {
             NoBits::N32 => "Int32",
             NoBits::N64 => "Int64",
         };
-        let inner = <dyn ColumnData>::load_data::<BoxColumnWrapper, _>(reader, type_name, size, tz)?;
+        let inner =
+            <dyn ColumnData>::load_data::<BoxColumnWrapper, _>(reader, type_name, size, tz)?;
 
         Ok(DecimalColumnData {
             inner,
@@ -160,7 +163,7 @@ impl ColumnData for DecimalColumnData {
                 }
             }
         } else {
-            panic!("value should be decimal ({:?})", value);
+            panic!("value should be decimal ({value:?})");
         }
     }
 
@@ -187,11 +190,20 @@ impl ColumnData for DecimalColumnData {
         })
     }
 
-    unsafe fn get_internal(&self, pointers: &[*mut *const u8], level: u8) -> Result<()> {
+    unsafe fn get_internal(
+        &self,
+        pointers: &[*mut *const u8],
+        level: u8,
+        _props: u32,
+    ) -> Result<()> {
         assert_eq!(level, 0);
-        self.inner.get_internal(pointers, 0)?;
+        self.inner.get_internal(pointers, 0, 0)?;
         *(pointers[2] as *mut NoBits) = self.nobits;
         Ok(())
+    }
+
+    fn get_timezone(&self) -> Option<Tz> {
+        None
     }
 }
 
@@ -241,6 +253,10 @@ impl<K: ColumnType> ColumnData for DecimalAdapter<K> {
     fn clone_instance(&self) -> BoxColumnData {
         unimplemented!()
     }
+
+    fn get_timezone(&self) -> Option<Tz> {
+        None
+    }
 }
 
 impl<K: ColumnType> ColumnData for NullableDecimalAdapter<K> {
@@ -249,17 +265,7 @@ impl<K: ColumnType> ColumnData for NullableDecimalAdapter<K> {
     }
 
     fn save(&self, encoder: &mut Encoder, start: usize, end: usize) {
-        let size = end - start;
-        let mut nulls = vec![0; size];
-        let mut values: Vec<Option<Decimal>> = vec![None; size];
-
-        for (i, index) in (start..end).enumerate() {
-            values[i] = Option::from_sql(self.at(index)).unwrap();
-            if values[i].is_none() {
-                nulls[i] = 1;
-            }
-        }
-
+        let (nulls, values) = extract_nulls_and_values::<Decimal, Self>(self, start, end).unwrap();
         encoder.write_bytes(nulls.as_ref());
 
         for value in values {
@@ -300,5 +306,9 @@ impl<K: ColumnType> ColumnData for NullableDecimalAdapter<K> {
 
     fn clone_instance(&self) -> BoxColumnData {
         unimplemented!()
+    }
+
+    fn get_timezone(&self) -> Option<Tz> {
+        self.column.data.get_timezone()
     }
 }

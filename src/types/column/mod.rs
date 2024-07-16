@@ -1,5 +1,5 @@
 use std::{
-    fmt, marker,
+    marker,
     net::{Ipv4Addr, Ipv6Addr},
     ops,
     sync::Arc,
@@ -14,14 +14,13 @@ use crate::{
         column::{
             column_data::ArcColumnData,
             decimal::{DecimalAdapter, NullableDecimalAdapter},
+            enums::{Enum16Adapter, Enum8Adapter, NullableEnum16Adapter, NullableEnum8Adapter},
             fixed_string::{FixedStringAdapter, NullableFixedStringAdapter},
-            simple_agg_func::SimpleAggregateFunctionColumnData,
             ip::{IpColumnData, Ipv4, Ipv6},
-            string::StringAdapter,
             iter::Iterable,
-            enums::{
-                Enum16Adapter, Enum8Adapter, NullableEnum16Adapter, NullableEnum8Adapter,
-            }
+            low_cardinality::LowCardinalityColumnData,
+            simple_agg_func::SimpleAggregateFunctionColumnData,
+            string::StringAdapter,
         },
         decimal::NoBits,
         SqlType, Value, ValueRef,
@@ -33,24 +32,27 @@ pub(crate) use self::{column_data::ColumnData, string_pool::StringPool};
 pub use self::{concat::ConcatColumnData, numeric::VectorColumnData};
 
 mod array;
+pub(crate) mod chrono_datetime;
 mod chunk;
 mod column_data;
 mod concat;
 mod date;
 pub(crate) mod datetime64;
-pub(crate) mod chrono_datetime;
 mod decimal;
 mod enums;
 mod factory;
 pub(crate) mod fixed_string;
 mod ip;
-pub(crate) mod iter;
+pub mod iter;
 mod list;
+mod low_cardinality;
+mod map;
 mod nullable;
 mod numeric;
+mod simple_agg_func;
 mod string;
 mod string_pool;
-mod simple_agg_func;
+mod util;
 
 /// Represents Clickhouse Column
 pub struct Column<K: ColumnType> {
@@ -65,12 +67,12 @@ pub trait ColumnFrom {
 
 pub trait ColumnType: Send + Copy + Sync + 'static {}
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct Simple {
     _private: (),
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct Complex {
     _private: (),
 }
@@ -78,18 +80,6 @@ pub struct Complex {
 impl ColumnType for Simple {}
 
 impl ColumnType for Complex {}
-
-impl Default for Simple {
-    fn default() -> Self {
-        Self { _private: () }
-    }
-}
-
-impl Default for Complex {
-    fn default() -> Self {
-        Self { _private: () }
-    }
-}
 
 impl<K: ColumnType> ColumnFrom for Column<K> {
     fn column_from<W: ColumnWrapper>(source: Self) -> W::Wrapper {
@@ -99,11 +89,7 @@ impl<K: ColumnType> ColumnFrom for Column<K> {
 
 impl<L: ColumnType, R: ColumnType> PartialEq<Column<R>> for Column<L> {
     fn eq(&self, other: &Column<R>) -> bool {
-        if self.len() != other.len() {
-            return false;
-        }
-
-        if self.sql_type() != other.sql_type() {
+        if self.len() != other.len() || self.sql_type() != other.sql_type() {
             return false;
         }
 
@@ -136,7 +122,7 @@ impl Column<Simple> {
         let chunks: Vec<_> = items_vec.iter().map(|column| column.data.clone()).collect();
         match items_vec.first() {
             None => unreachable!(),
-            Some(ref first_column) => {
+            Some(first_column) => {
                 let name: String = first_column.name().to_string();
                 let data = ConcatColumnData::concat(chunks);
                 Column {
@@ -164,7 +150,7 @@ impl<K: ColumnType> Column<K> {
     /// #     let pool = Pool::new(database_url);
     /// #     let mut client = pool.get_handle().await?;
     ///       let mut stream = client
-    ///             .query("SELECT number as n1, number as n2, number as n3 FROM numbers(100000000)")
+    ///             .query("SELECT number as n1, number as n2, number as n3 FROM numbers(1000)")
     ///             .stream_blocks();
     ///
     ///       let mut sum = 0;
@@ -194,7 +180,8 @@ impl<K: ColumnType> Column<K> {
     pub(crate) fn read<R: ReadEx>(reader: &mut R, size: usize, tz: Tz) -> Result<Column<K>> {
         let name = reader.read_string()?;
         let type_name = reader.read_string()?;
-        let data = <dyn ColumnData>::load_data::<ArcColumnWrapper, _>(reader, &type_name, size, tz)?;
+        let data =
+            <dyn ColumnData>::load_data::<ArcColumnWrapper, _>(reader, &type_name, size, tz)?;
         let column = Self {
             name,
             data,
@@ -247,6 +234,28 @@ impl<K: ColumnType> Column<K> {
         }
 
         match (dst_type.clone(), src_type.clone()) {
+            (SqlType::LowCardinality(inner), src_type) if src_type.is_inner_low_cardinality() => {
+                let name = self.name().to_owned();
+                let tz = self.data.get_timezone().unwrap_or(Tz::Zulu);
+                let mut low_card_data = LowCardinalityColumnData::empty(inner, tz, self.len())?;
+                for i in 0..self.len() {
+                    low_card_data.push(self.at(i).into());
+                }
+
+                if inner.is_datetime() {
+                    if let Some(casted_data) =
+                        low_card_data.inner.cast_to(&low_card_data.inner, inner)
+                    {
+                        low_card_data.inner = casted_data;
+                    }
+                }
+
+                Ok(Column {
+                    name,
+                    data: Arc::new(low_card_data),
+                    _marker: marker::PhantomData,
+                })
+            }
             (SqlType::FixedString(str_len), SqlType::String) => {
                 let name = self.name().to_owned();
                 let adapter = FixedStringAdapter {
@@ -446,11 +455,11 @@ impl<K: ColumnType> Column<K> {
                     name: inner_column.name,
                     data: Arc::new(SimpleAggregateFunctionColumnData {
                         inner: inner_column.data,
-                        func
+                        func,
                     }),
                     _marker: marker::PhantomData,
                 })
-            },
+            }
             _ => {
                 if let Some(data) = self.data.cast_to(&self.data, &dst_type) {
                     let name = self.name().to_owned();
@@ -465,7 +474,7 @@ impl<K: ColumnType> Column<K> {
                         dst: dst_type.to_string(),
                     }))
                 }
-            },
+            }
         }
     }
 
@@ -483,8 +492,23 @@ impl<K: ColumnType> Column<K> {
         }
     }
 
-    pub(crate) unsafe fn get_internal(&self, pointers: &[*mut *const u8], level: u8) -> Result<()> {
-        self.data.get_internal(pointers, level)
+    pub(crate) unsafe fn get_internal(
+        &self,
+        pointers: &[*mut *const u8],
+        level: u8,
+        props: u32,
+    ) -> Result<()> {
+        self.data.get_internal(pointers, level, props)
+    }
+
+    pub(crate) unsafe fn get_internals<D>(
+        &self,
+        data: &mut D,
+        level: u8,
+        props: u32,
+    ) -> Result<()> {
+        self.data
+            .get_internals(data as *mut D as *mut (), level, props)
     }
 }
 
@@ -497,16 +521,6 @@ pub(crate) fn new_column<K: ColumnType>(
         data,
         _marker: marker::PhantomData,
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Either<L, R>
-where
-    L: fmt::Debug + PartialEq + Clone,
-    R: fmt::Debug + PartialEq + Clone,
-{
-    Left(L),
-    Right(R),
 }
 
 pub trait ColumnWrapper {

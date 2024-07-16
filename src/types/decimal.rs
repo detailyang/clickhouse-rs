@@ -1,4 +1,8 @@
-use std::{fmt, cmp::Ordering};
+use std::{
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+};
 
 static FACTORS10: &[i64] = &[
     1,
@@ -53,6 +57,15 @@ impl Default for Decimal {
             scale: 4,
             nobits: NoBits::N32,
         }
+    }
+}
+
+impl Hash for Decimal {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.underlying.hash(state);
+        self.nobits.hash(state);
+        self.precision.hash(state);
+        self.scale.hash(state);
     }
 }
 
@@ -114,13 +127,13 @@ impl PartialEq for Decimal {
                 let delta = other.scale() - self.scale();
                 let underlying = self.underlying * FACTORS10[delta];
                 other.underlying == underlying
-            },
+            }
             Ordering::Equal => self.underlying == other.underlying,
             Ordering::Greater => {
                 let delta = self.scale() - other.scale();
                 let underlying = other.underlying * FACTORS10[delta];
                 self.underlying == underlying
-            },
+            }
         }
     }
 }
@@ -185,7 +198,7 @@ impl Decimal {
         }
 
         let underlying = source.scale(FACTORS10[scale as usize]);
-        if underlying > FACTORS10[precision as usize] as i64 {
+        if underlying > FACTORS10[precision as usize] {
             panic!("{} > {}", underlying, FACTORS10[precision as usize]);
         }
 

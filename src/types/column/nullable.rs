@@ -4,12 +4,16 @@ use crate::{
     binary::{Encoder, ReadEx},
     errors::Result,
     types::{
-        column::{column_data::{BoxColumnData, ArcColumnData}, Either, ArcColumnWrapper, ColumnData},
+        column::{
+            column_data::{ArcColumnData, BoxColumnData},
+            ArcColumnWrapper, ColumnData,
+        },
         SqlType, Value, ValueRef,
     },
 };
 
 use chrono_tz::Tz;
+use either::Either;
 
 pub(crate) struct NullableColumnData {
     pub(crate) inner: ArcColumnData,
@@ -25,7 +29,8 @@ impl NullableColumnData {
     ) -> Result<Self> {
         let mut nulls = vec![0; size];
         reader.read_bytes(nulls.as_mut())?;
-        let inner = <dyn ColumnData>::load_data::<ArcColumnWrapper, _>(reader, type_name, size, tz)?;
+        let inner =
+            <dyn ColumnData>::load_data::<ArcColumnWrapper, _>(reader, type_name, size, tz)?;
         Ok(NullableColumnData { inner, nulls })
     }
 }
@@ -85,13 +90,18 @@ impl ColumnData for NullableColumnData {
         })
     }
 
-    unsafe fn get_internal(&self, pointers: &[*mut *const u8], level: u8) -> Result<()> {
+    unsafe fn get_internal(
+        &self,
+        pointers: &[*mut *const u8],
+        level: u8,
+        props: u32,
+    ) -> Result<()> {
         if level == self.sql_type().level() {
             *pointers[0] = self.nulls.as_ptr();
             *(pointers[1] as *mut usize) = self.len();
             Ok(())
         } else {
-            self.inner.get_internal(pointers, level)
+            self.inner.get_internal(pointers, level, props)
         }
     }
 
@@ -100,10 +110,14 @@ impl ColumnData for NullableColumnData {
             if let Some(inner) = self.inner.cast_to(&self.inner, inner_target) {
                 return Some(Arc::new(NullableColumnData {
                     inner,
-                    nulls: self.nulls.clone()
-                }))
+                    nulls: self.nulls.clone(),
+                }));
             }
         }
         None
+    }
+
+    fn get_timezone(&self) -> Option<Tz> {
+        self.inner.get_timezone()
     }
 }

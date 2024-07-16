@@ -1,14 +1,16 @@
 use std::{borrow::Cow, marker};
 
 use chrono_tz::Tz;
+use either::Either;
 
 use crate::{
-        Block,
     errors::{Error, FromSqlError, Result},
     types::{
-        block::ColumnIdx, ColumnType,
-        column::{ArcColumnWrapper, ColumnData, Either}, Column, Value,
+        block::ColumnIdx,
+        column::{datetime64::DEFAULT_TZ, ArcColumnWrapper, ColumnData},
+        Column, ColumnType, Value,
     },
+    Block,
 };
 
 pub trait RowBuilder {
@@ -91,7 +93,11 @@ fn put_param<K: ColumnType>(
 
                 let column = Column {
                     name: key.clone().into(),
-                    data: <dyn ColumnData>::from_type::<ArcColumnWrapper>(sql_type, timezone, block.capacity)?,
+                    data: <dyn ColumnData>::from_type::<ArcColumnWrapper>(
+                        sql_type,
+                        timezone,
+                        block.capacity,
+                    )?,
                     _marker: marker::PhantomData,
                 };
 
@@ -110,17 +116,17 @@ fn put_param<K: ColumnType>(
 
 fn extract_timezone(value: &Value) -> Tz {
     match value {
-        Value::Date(_, tz) => *tz,
+        Value::Date(_) => *DEFAULT_TZ,
         Value::DateTime(_, tz) => *tz,
-        Value::Nullable(Either::Right(d)) => extract_timezone(&&d),
+        Value::Nullable(Either::Right(d)) => extract_timezone(d),
         Value::Array(_, data) => {
             if let Some(v) = data.first() {
                 extract_timezone(v)
             } else {
-                Tz::Zulu
+                *DEFAULT_TZ
             }
         }
-        _ => Tz::Zulu,
+        _ => *DEFAULT_TZ,
     }
 }
 
@@ -131,15 +137,15 @@ mod test {
 
     use crate::{
         row,
-        types::{Decimal, SqlType, Simple, DateTimeType},
+        types::{DateTimeType, Decimal, Simple, SqlType},
     };
 
     use super::*;
 
     #[test]
     fn test_push_row() {
-        let date_value: Date<Tz> = UTC.ymd(2016, 10, 22);
-        let date_time_value: DateTime<Tz> = UTC.ymd(2014, 7, 8).and_hms(14, 0, 0);
+        let date_value: NaiveDate = NaiveDate::from_ymd_opt(2016, 10, 22).unwrap();
+        let date_time_value: DateTime<Tz> = UTC.with_ymd_and_hms(2014, 7, 8, 14, 0, 0).unwrap();
 
         let decimal = Decimal::of(2.0_f64, 4);
 
@@ -196,7 +202,10 @@ mod test {
         );
 
         assert_eq!(block.columns[13].sql_type(), SqlType::Date);
-        assert_eq!(block.columns[14].sql_type(), SqlType::DateTime(DateTimeType::Chrono));
+        assert_eq!(
+            block.columns[14].sql_type(),
+            SqlType::DateTime(DateTimeType::Chrono)
+        );
         assert_eq!(block.columns[15].sql_type(), SqlType::Decimal(18, 4));
     }
 }
